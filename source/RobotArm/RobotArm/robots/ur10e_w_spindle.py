@@ -24,7 +24,7 @@ from isaaclab.assets.articulation import ArticulationCfg
 # User paths and prims
 # -----------------------------------------------------------------------------
 
-UR10E_USD_PATH = "/home/eunseop/isaac/isaac_save/ur10e_w_spindle_2.usd"
+UR10E_USD_PATH = "/home/eunseop/isaac/isaac_save/ur10e_tuning2.usd"
 # UR10E_PRIM_PATH = "/World/Robot"   # as in your USD
 EE_FRAME_NAME = "wrist_3_link"                      # end-effector frame in your USD
 
@@ -32,7 +32,7 @@ EE_FRAME_NAME = "wrist_3_link"                      # end-effector frame in your
 # Home pose (rad)
 # -----------------------------------------------------------------------------
 UR10E_HOME_DICT = {
-    "shoulder_pan_joint": 3.14159265359,
+    "shoulder_pan_joint": 0,
     "shoulder_lift_joint": -1.57079632679,
     "elbow_joint": -1.57079632679,
     "wrist_1_joint": -1.57079632679,
