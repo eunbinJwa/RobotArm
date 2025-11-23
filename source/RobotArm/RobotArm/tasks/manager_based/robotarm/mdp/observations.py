@@ -13,9 +13,8 @@ if "nrs_fk_core" not in sys.modules:
     from nrs_fk_core import FKSolver
 else:
     FKSolver = sys.modules["nrs_fk_core"].FKSolver
-
-
 fk_solver = FKSolver(tool_z=0.239, use_degrees=False)
+
 
 # 전역 버퍼 (env 별 히스토리 저장용)
 EE_HISTORY_BUFFER = None
@@ -26,34 +25,40 @@ def grid_mask_state_obs(env, grid_mask_history_len=4):
     """
     Workpiece의 Grid Mask 상태 관찰
     """
-    workpiece = env.scene["workpiece"]
-    
-    GRID_SIZE = 0.02
-    wp_size_x, wp_size_y = get_workpiece_size(workpiece)
-    grid_x_num = int(wp_size_x / GRID_SIZE)
-    grid_y_num = int(wp_size_y / GRID_SIZE)
+    if not hasattr(env, "grid_x_num"):
+        workpiece = env.scene["workpiece"]
+        try:
+            wp_size_x, wp_size_y = get_workpiece_size(workpiece)
+        except Exception as e:
+            wp_size_x, wp_size_y = 0.5, 0.5
+            print(f"Workpiece size dynamic read failed in obs: {e}. Using default.")
+
+        GRID_SIZE = 0.02
+        grid_x_num = int(wp_size_x / GRID_SIZE)
+        grid_y_num = int(wp_size_y / GRID_SIZE)
+    else:
+        grid_x_num = env.grid_x_num
+        grid_y_num = env.grid_y_num
 
     # env.grid_mask가 정의되지 않았다면 초기화
     if not hasattr(env, "grid_mask"):
-        print("Grid Mask not initialized; returning dummy tensor. (First run)")
         total_dim = grid_x_num * grid_y_num * grid_mask_history_len
         return torch.zeros((env.num_envs, total_dim), device=env.device)
     
-    # 현재 Grid Mask 상태 가져오기
+    # Grid Mask가 정의된 이후의 정상적인 실행 로직
     current_mask_float = env.grid_mask.float()
     is_reset = (env.episode_length_buf == 0).any()
     
-    # 커버리지 비율 (0~100) 계산
+    # 커버리지 비율 계산 및 디버깅 출력
     total_grids = grid_x_num * grid_y_num
     covered_counts = torch.sum(current_mask_float, dim=[1, 2])
     coverage_percentages = (covered_counts / total_grids) * 100
     first_env_coverage = coverage_percentages[0].item()
     print(f"Current Workpiece Coverage: {first_env_coverage:.2f}% (Total grids: {total_grids}, Covered: {covered_counts[0].item():.0f})")
-    
-    # 히스토리 버퍼 초기화
+
+    # 히스토리 버퍼 초기화 및 업데이트
     if not hasattr(env, "_grid_mask_history") or is_reset:
         history_shape = (env.num_envs, grid_mask_history_len) + current_mask_float.shape[1:]
-        # 초기화: history_len 만큼 현재 0 or Grid Mask로 채우기
         if is_reset and hasattr(env, "_grid_mask_history"):
             # 에피소드 리셋 시 0으로 초기화
             env._grid_mask_history = torch.zeros(history_shape, dtype=torch.float, device=env.device)
@@ -69,7 +74,7 @@ def grid_mask_state_obs(env, grid_mask_history_len=4):
         [env._grid_mask_history[:, 1:], new_mask_float_unsqueeze], dim=1
     )
 
-    # 4. 관찰 벡터 형태로 평탄화 (Flatten)
+    # 관찰 벡터 형태로 평탄화 (Flatten)
     # shape: (num_envs, history_len * grid_x_num * grid_y_num)
     obs_vector = env._grid_mask_history.flatten(start_dim=1)
     
@@ -78,16 +83,8 @@ def grid_mask_state_obs(env, grid_mask_history_len=4):
 
 
 def ee_pose_history(env, asset_cfg: SceneEntityCfg, history_len: int = 5) -> torch.Tensor:
-    """Return end-effector pose history for the given asset.
-
-    Args:
-        env: ManagerBasedRLEnv (현재 환경 인스턴스)
-        asset_cfg: SceneEntityCfg - 로봇 및 엔드이펙터 body 이름 포함
-        history_len: 저장할 히스토리 길이 (기본값 5 step)
-
-    Returns:
-        torch.Tensor: shape = [num_envs, history_len * 6]
-                      (각 step마다 [x, y, z, roll, pitch, yaw])
+    """
+    엔드이펙터 위치 및 자세(roll, pitch, yaw) 히스토리 반환
     """
     global EE_HISTORY_BUFFER, EE_HISTORY_LEN
 

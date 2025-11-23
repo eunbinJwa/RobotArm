@@ -134,8 +134,6 @@ class ObservationsCfg:
         grid_mask_state = ObsTerm(      # Grid Mask의 상태: Policy가 방문하지 않은 곳을 찾아가도록 유도
             func=local_obs.grid_mask_state_obs,
             params={
-                # "grid_mask": SceneEntityCfg("env", data_key="grid_mask"), 
-                    # "grid_mask": SceneEntityCfg(name="workpiece", body_names=["grid_mask"]),
                 "grid_mask_history_len": 4
             }
         )
@@ -178,7 +176,7 @@ class EventCfg:
     )
 
     reset_grid_mask = EventTerm(
-        func=mdp.reset_grid_mask,  # 1번에서 정의한 함수
+        func=local_rew.reset_grid_mask,
         mode="reset",
     )
 
@@ -257,7 +255,6 @@ class CurriculumCfg:
     # )
 
 
-
 ##
 # Environment configuration
 ##
@@ -284,7 +281,7 @@ class RobotarmEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 2
-        self.episode_length_s = 5.0
+        self.episode_length_s = 10.0
         # viewer settings
         self.viewer.eye = (3.5, 3.5, 3.5)
         # simulation settings
