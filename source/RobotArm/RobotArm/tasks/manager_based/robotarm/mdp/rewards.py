@@ -158,60 +158,6 @@ def coverage_reward(env, grid_size=0.02):
     return exp_reward
 
 
-def revisit_penalty(env, grid_size=0.02):
-    """
-    이미 방문한 grid cell을 다시 방문하면 벌점.
-    last_ee_cell: 이전 step의 EE grid 위치 (num_envs, 2)
-    """
-    ee_pos, wp_size_x, wp_size_y, grid_x, grid_y, num_envs, grid_x_num, grid_y_num = ee_to_grid(env, grid_size=grid_size)
-
-    # grid_mask 초기화
-    if env.grid_mask is None:
-        return torch.zeros(env.num_envs, device=env.device)
-    
-    # 현재 EE 위치가 grid_mask에서 True인지 확인 (재방문 여부 확인)
-    indices = torch.arange(num_envs, device=env.device)
-    is_revisited = env.grid_mask[indices, grid_x, grid_y]
-    revisited = is_revisited.float()   # True -> 1.0, False -> 0.0
-
-    return -revisited
-
-
-# def coverage_completion_reward(env, threshold=0.95, bonus_scale=10.0):
-#     """
-#     surface coverage 비율이 threshold를 넘으면 bonus_scale 만큼의 보상 제공
-#     """
-#     workpiece = env.scene["workpiece"]
-
-#     GRID_SIZE = 0.02
-#     wp_size_x, wp_size_y = get_workpiece_size(workpiece)
-#     grid_x_num = int(wp_size_x / GRID_SIZE)
-#     grid_y_num = int(wp_size_y / GRID_SIZE)
-
-#     if not hasattr(env, "grid_mask"):
-#         print("Grid Mask not initialized; returning dummy tensor. (First run)")
-#         total_dim = grid_x_num * grid_y_num
-#         return torch.zeros((env.num_envs, total_dim), device=env.device)
-    
-#     num_envs = env.grid_mask.shape[0]
-#     # 현재 커버리지 비율 (0.0 ~ 1.0)
-#     completion = env.grid_mask.view(num_envs, -1).float().mean(dim=1)
-#     # 임계값(threshold)을 넘어선 부분만 추출
-#     over_threshold = torch.clamp(completion - threshold, min=0.0)
-
-#     # (1.0 - threshold)가 0에 가까우면 나눗셈이 불안정해질 수 있으므로 epsilon 추가
-#     remaining_range = 1.0 - threshold
-#     epsilon = 1e-6
-#     if remaining_range > epsilon:
-#         normalized_bonus_ratio = over_threshold / remaining_range
-#     else:
-#         # threshold가 거의 1.0인 경우, over_threshold가 0보다 크면 1.0을 반환
-#         normalized_bonus_ratio = (over_threshold > 0.0).float()
-    
-#     # 커버리지 100% 달성 시 bonus_scale 만큼의 보상
-#     return normalized_bonus_ratio * bonus_scale
-
-
 def reset_grid_mask(env, env_ids):
     """
     에피소드 리셋 시 env.grid_mask 텐서를 False(0)로 초기화합니다.
@@ -267,6 +213,52 @@ def ee_orientation_alignment(env, asset_cfg: SceneEntityCfg, target_axis=(0.0, 0
     
     # 5. 보상 반환: 1에 가까울수록 높은 보상
     return alignment_measure
+
+
+def revisit_penalty(env, grid_size=0.02):
+    """
+    이미 방문한 grid cell을 다시 방문하면 벌점.
+    last_ee_cell: 이전 step의 EE grid 위치 (num_envs, 2)
+    """
+    ee_pos, wp_size_x, wp_size_y, grid_x, grid_y, num_envs, grid_x_num, grid_y_num = ee_to_grid(env, grid_size=grid_size)
+
+    # grid_mask 초기화
+    if env.grid_mask is None:
+        return torch.zeros(env.num_envs, device=env.device)
+    
+    # 현재 EE 위치가 grid_mask에서 True인지 확인 (재방문 여부 확인)
+    indices = torch.arange(num_envs, device=env.device)
+    is_revisited = env.grid_mask[indices, grid_x, grid_y]
+    revisited = is_revisited.float()   # True -> 1.0, False -> 0.0
+
+    return -revisited
+
+
+def coverage_completion_reward(env, threshold=0.95, bonus_scale=10.0):
+    """
+    surface coverage 비율이 threshold를 넘으면 bonus_scale 만큼의 보상 제공
+    """
+    if env.grid_mask is None:
+        return torch.zeros(env.num_envs, device=env.device)
+    
+    num_envs = env.grid_mask.shape[0]
+    # 현재 커버리지 비율 (0.0 ~ 1.0)
+    completion = env.grid_mask.view(num_envs, -1).float().mean(dim=1)
+    
+    # 임계값(threshold)을 넘어선 부분만 추출
+    over_threshold = torch.clamp(completion - threshold, min=0.0)
+    # 남은 완료 비율 (1 - threshold)로 나누어 다시 0.0 ~ 1.0 범위로 정규화
+    # (1.0 - threshold)가 0에 가까우면 나눗셈이 불안정해질 수 있으므로 epsilon 추가
+    remaining_range = 1.0 - threshold
+    epsilon = 1e-6
+    if remaining_range > epsilon:
+        normalized_bonus_ratio = over_threshold / remaining_range
+    else:
+        # threshold가 거의 1.0인 경우, over_threshold가 0보다 크면 1.0을 반환
+        normalized_bonus_ratio = (over_threshold > 0.0).float()
+    
+    # 커버리지 100% 달성 시 bonus_scale 만큼의 보상
+    return normalized_bonus_ratio * bonus_scale
 
 
 def time_efficiency_reward(env, max_steps: int = 1000):
