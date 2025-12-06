@@ -1,0 +1,3 @@
+source;share/RobotArm/hook/pythonpath.ps1
+source;share/RobotArm/hook/pythonpath.dsv
+source;share/RobotArm/hook/pythonpath.sh

@@ -162,7 +162,8 @@ def coverage_reward(env, grid_size=0.02):
     coverage_ratio = current_covered_count / total_cells
 
     # exponential scaling 적용
-    exp_reward = newly_visited * (torch.exp(3.0 * coverage_ratio) - 1.0)
+    # exp_reward = newly_visited * (torch.exp(3.0 * coverage_ratio) - 1.0)
+    exp_reward = (torch.exp(3.0 * coverage_ratio) - 1.0)
 
     return exp_reward
 
@@ -258,23 +259,32 @@ def surface_proximity_reward(env, asset_cfg: SceneEntityCfg):
 def ee_orientation_alignment(env, asset_cfg: SceneEntityCfg, target_axis=(0.0, 0.0, -1.0)):
     """
     엔드이펙터(EE)의 Z축이 월드 좌표계의 목표 축(Target Axis)과 정렬되도록 보상을 제공
-    (폴리싱 작업에서 Workpiece 표면에 수직을 유지하기 위함)
     """
-    ee_pose = get_ee_pose(env, asset_name="robot") 
+    # 1. Asset 이름 가져오기
+    asset_name = asset_cfg.name if hasattr(asset_cfg, "name") else "robot"
+    
+    # 2. EE 위치 및 회전 정보 가져오기
+    ee_pose = get_ee_pose(env, asset_name=asset_name) 
+    
+    # roll, pitch, yaw 추출
     roll, pitch, yaw = ee_pose[:, 3], ee_pose[:, 4], ee_pose[:, 5]
     
-    # 엔드이펙터 Z축 벡터 계산
-    ee_z_axis_w = matrix_from_euler(roll, pitch, yaw) # shape: (num_envs, 3)
+    # [중요] 3개의 변수를 하나의 텐서로 합칩니다. (shape: [num_envs, 3])
+    euler_angles = torch.stack([roll, pitch, yaw], dim=-1)
     
-    # 목표 축
+    # [중요] 함수에 합친 텐서와 회전 순서("XYZ")를 넣어줍니다.
+    rot_mat = matrix_from_euler(euler_angles, "XYZ")
+
+    # 회전 행렬의 3번째 열(Column)이 로봇의 Z축 방향입니다.
+    ee_z_axis_w = rot_mat[:, :, 2]
+    
+    # 목표 축과 비교
     target_axis_t = torch.tensor(target_axis, dtype=ee_z_axis_w.dtype, device=env.device).unsqueeze(0).repeat(env.num_envs, 1)
     
-    # 내적(Dot product) 계산: alignment_measure = cos(theta)
+    # 내적(Dot product)으로 정렬도 계산 (1에 가까울수록 수직)
     alignment_measure = torch.abs(torch.sum(ee_z_axis_w * target_axis_t, dim=1))
     
-    # 보상: 1에 가까울수록 높은 보상
     return alignment_measure
-
 
 def time_efficiency_reward(env, max_steps: int = 1000):
     """
@@ -289,3 +299,32 @@ def time_efficiency_reward(env, max_steps: int = 1000):
     reward = torch.clamp(reward, min=0.0, max=1.0)
 
     return reward
+    
+    
+def action_magnitude_reward(env):
+    """
+    로봇이 가만히 있지 않고 관절을 움직이면 보상 (얼음 땡 효과)
+    """
+    # env.action_manager.action : 현재 스텝에서 로봇이 취한 행동(Action) 값
+    return torch.mean(torch.square(env.action_manager.action), dim=1)
+    
+def distance_to_workpiece_reward(env, asset_cfg: SceneEntityCfg):
+    """
+    가장자리에 있는 로봇을 작업물 중앙으로 당겨오는 자석 보상
+    """
+    # 1. 로봇 손끝(EE) 위치 (X, Y)
+    asset_name = asset_cfg.name if hasattr(asset_cfg, "name") else "robot"
+    ee_pose = get_ee_pose(env, asset_name=asset_name)
+    ee_xy = ee_pose[:, :2]
+
+    # 2. 작업물 중심 위치 (X, Y)
+    workpiece = env.scene["workpiece"]
+    workpiece_pos_tensor, _ = workpiece.get_world_poses()
+    workpiece_pos_tensor = workpiece_pos_tensor.to(env.device)
+    target_xy = workpiece_pos_tensor.squeeze()[:2]
+
+    # 3. 거리 계산 (멀수록 점수가 작아짐)
+    distance = torch.norm(ee_xy - target_xy, dim=1)
+    
+    # 4. 거리가 0에 가까우면 1점, 멀면 0점
+    return torch.exp(-2.0 * distance)

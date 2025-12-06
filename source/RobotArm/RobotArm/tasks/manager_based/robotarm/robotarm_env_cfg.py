@@ -141,6 +141,7 @@ class ObservationsCfg:
         ee_pose_history = ObsTerm(
             func=local_obs.ee_pose_history,
             params={
+            	"asset_cfg": SceneEntityCfg("robot"),
                 "history_len": 10
                 },
         )
@@ -184,47 +185,68 @@ class EventCfg:
 class RewardsCfg:
     """Reward terms for the MDP."""
     
-    # 커버리지 증가 보상 및 중복 방문 패널티
+    # [핵심 1: 당근 강화] 커버리지 보상을 2.0 -> 10.0으로 5배 뻥튀기
+    # 로봇에게 "바닥 닦는 게 이 세상에서 제일 중요하다"고 세뇌시킴
     coverage = RewTerm(
         func=local_rew.coverage_reward,
-        weight=2.0,
-        params={"grid_size": 0.02},
-    )
-    revisit_penalty = RewTerm(
-        func=local_rew.revisit_penalty,
-        weight=-0.5,
+        weight=10.0, 
         params={"grid_size": 0.02},
     )
 
-    # 안정성 (EE의 z 높이 및 자세)
+    # [핵심 2: 채찍 제거] 중복 방문 벌점을 -0.5 -> 0.0으로 삭제
+    # "같은 곳 또 가도 되니까 제발 쫄지 말고 움직여"라고 안심시킴
+    revisit_penalty = RewTerm(
+        func=local_rew.revisit_penalty,
+        weight=0.0, 
+        params={"grid_size": 0.02},
+    )
+
+    # [핵심 3: 나침반 추가] 가장자리에 있는 로봇을 중앙(0,0)으로 당겨오는 자석
+    # rewards.py에 distance_to_workpiece_reward 함수가 있어야 함
+    distance_to_center = RewTerm(
+        func=local_rew.distance_to_workpiece_reward,
+        weight=0.5, 
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=[EE_FRAME_NAME])},
+    )
+
+    # [핵심 4: 얼음 땡] 가만히 있으면 0점, 움직이면 점수 줌
+    # rewards.py에 action_magnitude_reward 함수가 있어야 함
+    action_movement = RewTerm(
+        func=local_rew.action_magnitude_reward,
+        weight=0.1, 
+    )
+
+    # [기존 유지] 표면 높이 유지 (너무 강하면 표면에 못 붙으니 1.0 유지)
     surface_proximity = RewTerm(
         func=local_rew.surface_proximity_reward,
         weight=1.0,
         params={"asset_cfg": SceneEntityCfg("robot", body_names=EE_FRAME_NAME)},
     )
+    
+    # [기존 유지] 수직 자세 유지
+    # 초반 탐색 방해를 줄이기 위해 1.5 -> 0.5로 잠시 낮춤 (나중에 올려도 됨)
     ee_orientation_alignment = RewTerm(
         func=local_rew.ee_orientation_alignment,
-        weight=1.5,
+        weight=0.5,
         params={
             "asset_cfg": SceneEntityCfg("robot", body_names=[EE_FRAME_NAME]),
-            "target_axis": (0.0, 0.0, -1.0), # EE의 Z축이 월드 Z축과 평행하도록 (수직 폴리싱 가정)
+            "target_axis": (0.0, 0.0, -1.0),
         },
     )
 
-    # 커버리지 100% 달성 시 큰 보상
+    # [기존 유지] 100% 달성 보너스 (초반엔 의미 없지만 놔둠)
     coverage_completion = RewTerm(
         func=local_rew.coverage_completion_reward,
         weight=1.0,
         params={"threshold": 0.90, "bonus_scale": 10.0}
     )
 
-    # 효율성
+    # [기존 유지] 시간 효율성
     time_efficiency = RewTerm(
         func=local_rew.time_efficiency_reward,
         weight=1.0,
-        params={"max_steps": 750},  # episode 길이에 맞춰 조정
+        params={"max_steps": 750},
     )
-
 
 @configclass
 class TerminationsCfg:

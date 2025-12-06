@@ -1,0 +1,18 @@
+[0.263s] Invoking command in '/home/eunseop/RobotArm/source/RobotArm': CONDA_PROMPT_MODIFIER=(env_isaaclab) PYTHONPATH=/home/eunseop/RobotArm/build/RobotArm/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/eunseop/RobotArm/install/RobotArm/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/RobotArm build --build-base /home/eunseop/RobotArm/build/RobotArm/build install --record /home/eunseop/RobotArm/build/RobotArm/install.log --single-version-externally-managed
+[0.361s] running egg_info
+[0.361s] writing ../../build/RobotArm/RobotArm.egg-info/PKG-INFO
+[0.361s] writing dependency_links to ../../build/RobotArm/RobotArm.egg-info/dependency_links.txt
+[0.361s] writing requirements to ../../build/RobotArm/RobotArm.egg-info/requires.txt
+[0.361s] writing top-level names to ../../build/RobotArm/RobotArm.egg-info/top_level.txt
+[0.362s] reading manifest file '../../build/RobotArm/RobotArm.egg-info/SOURCES.txt'
+[0.362s] writing manifest file '../../build/RobotArm/RobotArm.egg-info/SOURCES.txt'
+[0.362s] running build
+[0.362s] running build_py
+[0.362s] running install
+[0.363s] running install_lib
+[0.363s] running install_egg_info
+[0.364s] removing '/home/eunseop/RobotArm/install/RobotArm/lib/python3.10/site-packages/RobotArm-0.1.0-py3.10.egg-info' (and everything under it)
+[0.364s] Copying ../../build/RobotArm/RobotArm.egg-info to /home/eunseop/RobotArm/install/RobotArm/lib/python3.10/site-packages/RobotArm-0.1.0-py3.10.egg-info
+[0.364s] running install_scripts
+[0.373s] writing list of installed files to '/home/eunseop/RobotArm/build/RobotArm/install.log'
+[0.383s] Invoked command in '/home/eunseop/RobotArm/source/RobotArm' returned '0': CONDA_PROMPT_MODIFIER=(env_isaaclab) PYTHONPATH=/home/eunseop/RobotArm/build/RobotArm/prefix_override:/usr/lib/python3/dist-packages/colcon_core/task/python/colcon_distutils_commands:/home/eunseop/RobotArm/install/RobotArm/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/python3 -W ignore:setup.py install is deprecated -W ignore:easy_install command is deprecated setup.py egg_info --egg-base ../../build/RobotArm build --build-base /home/eunseop/RobotArm/build/RobotArm/build install --record /home/eunseop/RobotArm/build/RobotArm/install.log --single-version-externally-managed
