@@ -13,7 +13,7 @@ from RobotArm.tasks.manager_based.robotarm.mdp.rewards import get_workpiece_size
 # 전역 버퍼 (env 별 히스토리 저장용)
 EE_HISTORY_BUFFER = None
 EE_HISTORY_LEN = None
-
+GRID_SIZE = 0.1
 
 def grid_mask_state_obs(env, grid_mask_history_len=4):
     """
@@ -22,17 +22,18 @@ def grid_mask_state_obs(env, grid_mask_history_len=4):
     if not hasattr(env, "grid_x_num"):
         workpiece = env.scene["workpiece"]
         try:
-            wp_size_x, wp_size_y = get_workpiece_size(workpiece)
+            env.wp_size_x, env.wp_size_y = get_workpiece_size(workpiece)
         except Exception as e:
-            wp_size_x, wp_size_y = 0.5, 0.5
+            env.wp_size_x, env.wp_size_y = 0.5, 0.5
             print(f"Workpiece size dynamic read failed in obs: {e}. Using default.")
 
-        GRID_SIZE = 0.02
-        grid_x_num = int(wp_size_x / GRID_SIZE)
-        grid_y_num = int(wp_size_y / GRID_SIZE)
-    else:
-        grid_x_num = env.grid_x_num
-        grid_y_num = env.grid_y_num
+        wp_size_x_t = torch.tensor(env.wp_size_x, device=env.device)
+        wp_size_y_t = torch.tensor(env.wp_size_y, device=env.device)
+        env.grid_x_num = torch.ceil(wp_size_x_t / GRID_SIZE).long().item()
+        env.grid_y_num = torch.ceil(wp_size_y_t / GRID_SIZE).long().item()
+    
+    grid_x_num = env.grid_x_num
+    grid_y_num = env.grid_y_num
 
     # env.grid_mask가 정의되지 않았다면 초기화
     if not hasattr(env, "grid_mask"):
@@ -77,7 +78,7 @@ def grid_mask_state_obs(env, grid_mask_history_len=4):
 
 
 
-def ee_pose_history(env, asset_cfg: SceneEntityCfg, history_len: int = 5) -> torch.Tensor:
+def ee_pose_history(env, history_len: int = 5) -> torch.Tensor:
     """
     엔드이펙터 위치 및 자세(roll, pitch, yaw) 히스토리 반환
     """

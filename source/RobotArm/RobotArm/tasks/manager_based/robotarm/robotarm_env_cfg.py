@@ -130,7 +130,7 @@ class ObservationsCfg:
         grid_mask_state = ObsTerm(      # Grid Mask의 상태: Policy가 방문하지 않은 곳을 찾아가도록 유도
             func=local_obs.grid_mask_state_obs,
             params={
-                "grid_mask_history_len": 4,
+                "grid_mask_history_len": 1,
             }
         )
 
@@ -181,13 +181,13 @@ class RewardsCfg:
 
     coverage = RewTerm(
         func=local_rew.coverage_reward,
-        weight=1.0,
+        weight=3.5,
         params={"exp_scale": 4.0},
     )
     
     ee_movement = RewTerm(
         func=local_rew.ee_movement_reward,
-        weight=20.0,
+        weight=10.0,
     )
 
     out_of_bounds_penalty = RewTerm(
@@ -198,13 +198,13 @@ class RewardsCfg:
     # 중복 방문 벌점을 0.5 -> 0.0으로 삭제
     revisit_penalty = RewTerm(
         func=local_rew.revisit_penalty,
-        weight=0.0,
+        weight=0.5,
     )
 
     # 표면 높이 유지
     surface_proximity = RewTerm(
         func=local_rew.surface_proximity_reward,
-        weight=5.0,
+        weight=3.0,
     )
     
     # 수직 자세 유지
@@ -218,7 +218,7 @@ class RewardsCfg:
     # 시간 효율성
     time_efficiency = RewTerm(
         func=local_rew.time_efficiency_reward,
-        weight=0.5,
+        weight=0.2,
         params={"max_steps": 1800},
     )
 
