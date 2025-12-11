@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import torch
+import os
+import csv
 from typing import TYPE_CHECKING
 from isaaclab.assets import RigidObject
 from isaaclab.managers import SceneEntityCfg
-from isaaclab.utils.math import matrix_from_euler, combine_frame_transforms, quat_error_magnitude, quat_mul
+from isaaclab.utils.math import matrix_from_euler, quat_apply, quat_mul, quat_from_euler_xyz, euler_xyz_from_quat, combine_frame_transforms, quat_error_magnitude
 from pxr import UsdGeom
 
 if TYPE_CHECKING:
@@ -19,6 +21,262 @@ else:
 
 from RobotArm.robots.ur10e_w_spindle import *
 
+GRID_SIZE = 0.1 # 10cm 그리드 셀 크기
+ENV_ID = 10     # 디버깅용 환경 인덱스
+
+# def new_visit_reward(env: "ManagerBasedRLEnv"):
+#     """
+#     새로 방문한 grid cell의 증가분을 계산해 보상을 반환합니다.
+#     (Coverage Exploration의 즉각적인 보상 요소)
+#     """
+#     # grid_mask 업데이트는 항상 필요합니다.
+#     grid_x, grid_y = ee_to_grid(env)
+
+#     if not hasattr(env, "grid_mask"):
+#         return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+#     previous_mask = env.grid_mask.clone()
+#     indices = torch.arange(env.num_envs, device=env.device)
+    
+#     # 현재 위치 방문 표시 (마스크 업데이트)
+#     env.grid_mask[indices, grid_x, grid_y] = True
+
+#     # 새로 방문한 셀 수 (env별)
+#     newly_visited = (env.grid_mask.long() - previous_mask.long()).sum(dim=(1, 2)).float()
+
+#     return newly_visited
+
+
+def coverage_reward(env: "ManagerBasedRLEnv", exp_scale: float = 5.0):
+    """
+    엔드이펙터가 방문한 grid cell의 증가분을 계산해 coverage reward를 반환.
+    """
+    grid_x, grid_y = ee_to_grid(env)
+    
+    if not hasattr(env, "grid_mask"):
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+    
+    indices = torch.arange(env.num_envs, device=env.device)
+    env.grid_mask[indices, grid_x, grid_y] = True
+    total_cells = env.grid_x_num * env.grid_y_num
+    
+    # 전체 coverage 비율
+    current_covered_count = env.grid_mask.sum(dim=(1, 2)).float()
+    coverage_ratio = current_covered_count / float(total_cells)  # (num_envs,)
+
+    print(f"Current Workpiece Coverage: {coverage_ratio[ENV_ID].item()*100:.2f}% "
+          f"(Total cells: {total_cells}, Covered: {current_covered_count[ENV_ID].item():.0f})")
+    log_coverage_data(env, coverage_ratio[ENV_ID])
+
+    # exponential scaling 적용
+    exp_coverage_reward = torch.exp(exp_scale * coverage_ratio)
+
+    return exp_coverage_reward
+
+
+def ee_movement_reward(env: "ManagerBasedRLEnv", max_movement: float = 0.05):
+    """
+    엔드 이펙터의 움직인 거리에 대한 보상을 제공하여 정지 정책을 방지합니다.
+    (Exploration 유도 및 Inaction Penalty 대체 요소)
+    """
+    ee_pose = get_ee_pose(env, asset_name="robot")
+    ee_pos = ee_pose[:, :3]
+
+    if not hasattr(env, "_prev_ee_pos"):
+        # 초기화. 다음 스텝부터 유효합니다.
+        env._prev_ee_pos = ee_pos.clone()
+        return torch.zeros(env.num_envs, dtype=torch.float32, device=env.device)
+
+    # 움직인 거리 계산
+    movement = torch.norm(ee_pos - env._prev_ee_pos, dim=1)  # (num_envs,)
+    env._prev_ee_pos = ee_pos.clone()
+
+    # movement를 클리핑하여 너무 격렬한 움직임에 과도한 보상을 주지 않도록 합니다.
+    movement_clipped = torch.clamp(movement, 0.0, max_movement)
+
+    return movement_clipped
+
+
+def out_of_bounds_penalty(env: "ManagerBasedRLEnv"):
+    """
+    작업물 XY 범위를 벗어난 경우 강한 패널티를 부여하는 보상 함수.
+    scale: penalty strength (기본=5.0)
+    """
+    # EE 위치 (월드 프레임)
+    ee_pos = get_ee_pose(env, asset_name="robot")[:, :3]
+    ee_x = ee_pos[:, 0]
+    ee_y = ee_pos[:, 1]
+
+    # 작업물 정보
+    workpiece = env.scene["workpiece"]
+    wp_pos, _ = workpiece.get_world_poses()
+    wp_pos = wp_pos.to(env.device).squeeze()
+
+    wp_size_x = env.wp_size_x
+    wp_size_y = env.wp_size_y
+
+    half_x = wp_size_x / 2
+    half_y = wp_size_y / 2
+
+    # 유효 범위
+    min_x = wp_pos[0] - half_x
+    max_x = wp_pos[0] + half_x
+    min_y = wp_pos[1] - half_y
+    max_y = wp_pos[1] + half_y
+
+    # 범위 검사
+    out_x = (ee_x < min_x) | (ee_x > max_x)
+    out_y = (ee_y < min_y) | (ee_y > max_y)
+    out_of_bounds = out_x | out_y
+
+    return -out_of_bounds.float()
+
+
+def revisit_penalty(env: "ManagerBasedRLEnv"):
+    """
+    이미 방문한 grid cell을 다시 방문하면 벌점
+    """
+    grid_x, grid_y = ee_to_grid(env)
+
+    # grid_mask 초기화
+    if not hasattr(env, "grid_mask"):
+        return torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
+    
+    # 현재 EE 위치가 grid_mask에서 True인지 확인 (재방문 여부 확인)
+    indices = torch.arange(env.num_envs, device=env.device)
+    is_revisited = env.grid_mask[indices, grid_x, grid_y]
+    revisited = is_revisited.float()   # True -> 1.0, False -> 0.0
+
+    return -revisited
+
+
+def surface_proximity_reward(env: "ManagerBasedRLEnv"):
+    ee_pose = get_ee_pose(env, asset_name="robot") 
+    ee_z = ee_pose[:, 2]
+
+    # workpiece의 높이(평면 가정)
+    workpiece = env.scene["workpiece"]
+    target_z = get_workpiece_surface_height(workpiece, surface_offset=0.239)
+    target_z_tensor = torch.full_like(ee_z, target_z)
+    error = torch.abs(ee_z - target_z_tensor)
+
+    error = torch.clamp(error - 0.05, min=0)  # 5cm 이내 오차는 허용
+    return torch.exp(-3 * error)
+
+
+def ee_orientation_alignment(env: "ManagerBasedRLEnv", target_axis=(0.0, 0.0, -1.0)):
+    """
+    엔드이펙터(EE)의 Z축이 월드 좌표계의 목표 축(Target Axis)과 정렬되도록 보상을 제공
+    """
+    ee_pose = get_ee_pose(env, asset_name="robot") 
+    roll, pitch, yaw = ee_pose[:, 3], ee_pose[:, 4], ee_pose[:, 5]
+    
+    # (num_envs, 3) 텐서로 결합, 회전 행렬 계산
+    euler_angles = torch.stack([roll, pitch, yaw], dim=-1)
+    rot_mat = matrix_from_euler(euler_angles, "XYZ")
+    ee_z_axis_w = rot_mat[:, :, 2]
+    
+    # 목표 축과 비교
+    target_axis_t = torch.tensor(target_axis, dtype=ee_z_axis_w.dtype, device=env.device).unsqueeze(0).repeat(env.num_envs, 1)
+    
+    # 내적(Dot product)으로 정렬도 계산 (1에 가까울수록 수직)
+    alignment_measure = torch.sum(ee_z_axis_w * target_axis_t, dim=1)
+    alignment_reward = (alignment_measure + 1.0) / 2.0
+    # alignment_reward = torch.clamp(alignment_measure, min=0.0)
+    
+    return alignment_reward
+
+
+def time_efficiency_reward(env: "ManagerBasedRLEnv", max_steps: int = 1000):
+    """
+    시간 효율성에 대한 보상함수
+    """
+    # 현재 step
+    current_step_tensor = env.episode_length_buf.to(torch.float32)
+    max_steps_tensor = torch.tensor(max_steps, dtype=torch.float32, device=env.device)
+
+    # normalize: 0 ~ 1, 작을수록 reward 높음
+    reward = 1.0 - (current_step_tensor / max_steps_tensor)
+    reward = torch.clamp(reward, min=0.0, max=1.0)
+
+    return reward
+
+
+def distance_to_workpiece_reward(env: "ManagerBasedRLEnv"):
+    """
+    가장자리에 있는 로봇을 작업물 중앙으로 당겨오는 자석 보상
+    """
+    # 1. 로봇 손끝(EE) 위치 (X, Y)
+    ee_pose = get_ee_pose(env, asset_name="robot")
+    ee_xy = ee_pose[:, :2]
+
+    # 2. 작업물 중심 위치 (X, Y)
+    workpiece = env.scene["workpiece"]
+    workpiece_pos_tensor, _ = workpiece.get_world_poses()
+    workpiece_pos_tensor = workpiece_pos_tensor.to(env.device)
+    target_xy = workpiece_pos_tensor.squeeze()[:2]
+
+    # 3. 거리 계산 (멀수록 점수가 작아짐)
+    distance = torch.norm(ee_xy - target_xy, dim=1)
+    
+    # 4. 거리가 0에 가까우면 1점, 멀면 0점
+    return torch.exp(-2.0 * distance)
+
+
+# ====================================================
+# 종료 조건 함수
+# ====================================================
+
+def check_coverage_success(env: "ManagerBasedRLEnv") -> torch.Tensor:
+    """
+    Workpiece 커버리지가 100%인지 확인하고 성공 텐서를 반환합니다.
+    """
+    if not hasattr(env, "grid_mask"):
+        # grid_mask가 없으면 아직 성공할 수 없음
+        return torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+
+    total_cells = env.grid_x_num * env.grid_y_num
+    
+    # 현재 방문한 셀의 수 (env별)
+    current_covered_count = env.grid_mask.sum(dim=(1, 2)).float()
+    
+    # current_covered_count가 total_cells과 같거나 큰 경우 성공 (85% 달성)
+    is_success = (current_covered_count/total_cells >= 0.95)
+    
+    return is_success
+
+
+# ====================================================
+# 유틸리티 함수들
+# ====================================================
+
+LOG_FILE = "coverage_history.csv"
+LOG_HEADER = ["step", "coverage_ratio"]
+
+def init_coverage_logger():
+    """CSV 로깅 파일을 초기화하고 헤더 작성"""
+    # 기존 파일이 있다면 삭제
+    if os.path.exists(LOG_FILE):
+        os.remove(LOG_FILE)
+        
+    with open(LOG_FILE, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(LOG_HEADER)
+
+def log_coverage_data(env, coverage_ratio):
+    """
+    특정 환경(env_id)의 커버율 데이터를 CSV 파일에 추가
+    """
+    # 텐서의 데이터를 CPU로 옮겨 Python float으로 변환
+    current_ratio = coverage_ratio.item()
+    # 현재 에피소드 및 스텝 정보 가져오기 (env.episode_length_buf 사용)
+    current_step = env.episode_length_buf[ENV_ID].item()
+
+    row = [current_step, current_ratio * 100]
+    
+    with open(LOG_FILE, 'a', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(row)
 
 def get_workpiece_vertices(workpiece):
     """USD Mesh에서 Workpiece vertices 추출"""
@@ -37,10 +295,9 @@ def get_workpiece_vertices(workpiece):
         return vertices
         
     except Exception as e:
-        print(f"[get_workpiece_size] USD size read failed: {e}, using default size 0.5x0.5")
+        print(f"USD read failed: {e}, returning None for vertices.")
         return None
     
-
 def get_workpiece_size(workpiece):
     """USD Mesh에서 Workpiece 크기 추출, 실패 시 기본값 0.5x0.5 사용"""
     wp_size_x, wp_size_y = 0.5, 0.5
@@ -50,19 +307,21 @@ def get_workpiece_size(workpiece):
     else:
         xs = [v[0] for v in vertices]
         ys = [v[1] for v in vertices]
-        wp_size_x = max(xs) - min(xs)
+        wp_size_x = max(xs) - min(xs)# EE의 월드 XY 좌표
         wp_size_y = max(ys) - min(ys)
+        print("max xs:", max(xs), "min xs:", min(xs))
+        print("max ys:", max(ys), "min ys:", min(ys))
+        print("wp_size_x:", wp_size_x, "wp_size_y:", wp_size_y)
 
         return wp_size_x, wp_size_y
 
-
-def get_workpiece_surface_height(workpiece, surface_offset=0.005):
+def get_workpiece_surface_height(workpiece, surface_offset=0.0):
     """
     Workpiece 표면의 월드 Z 좌표 계산
     """
     vertices = get_workpiece_vertices(workpiece)
     if vertices is None:
-        print(f"[get_surface_height] Failed to determine Z height: {e}, using fallback height 0.0955")
+        print(f"[get_surface_height] Failed to determine Z height, using fallback height 0.0955")
         return 0.0955
     else:
         zs = [v[2] for v in vertices]
@@ -70,8 +329,7 @@ def get_workpiece_surface_height(workpiece, surface_offset=0.005):
         target_height = workpiece_z_size + surface_offset
         return target_height
 
-
-def get_ee_pose(env: "ManagerBasedRLEnv", asset_name: str = "robot"):
+def get_ee_pose(env: "ManagerBasedRLEnv", asset_name: str = "robot", ee_frame_name=EE_FRAME_NAME):
     """
     Returns end-effector pose (x, y, z, roll, pitch, yaw)
     -----------------------------------------------------
@@ -81,153 +339,118 @@ def get_ee_pose(env: "ManagerBasedRLEnv", asset_name: str = "robot"):
     """
     robot = env.scene[asset_name]
     q = robot.data.joint_pos[:, :6]  # (num_envs, 6)
-    num_envs = q.shape[0]
 
+    # 로봇 베이스 프레임 기준 EE 위치 및 자세 계산
     fk_solver = FKSolver(tool_z=0.239, use_degrees=False)
-    ee_pose_list = []
+    ee_pose_local_list = []
 
-    for i in range(num_envs):
+    for i in range(env.num_envs):
         q_np = q[i].cpu().numpy().astype(float)
         ok, pose = fk_solver.compute(q_np, as_degrees=False)
         if not ok:
-            ee_pose_list.append([float('nan')]*6)
+            ee_pose_local_list.append([float('nan')]*6)
         else:
-            ee_pose_list.append([pose.x, pose.y, pose.z, pose.r, pose.p, pose.yaw])
+            ee_pose_local_list.append([pose.x, pose.y, pose.z, pose.r, pose.p, pose.yaw])
 
-    ee_pose = torch.tensor(ee_pose_list, dtype=torch.float32, device=q.device)
-    assert ee_pose.ndim == 2 and ee_pose.shape[1] == 6, f"[EE_POSE] Invalid shape: {ee_pose.shape}"
+    ee_pose_local = torch.tensor(ee_pose_local_list, dtype=torch.float32, device=q.device)
+    ee_pos_local = ee_pose_local[:, :3]
+    ee_rpy_local = ee_pose_local[:, 3:]
+
+    ee_quat_local = quat_from_euler_xyz(ee_rpy_local[:, 0], ee_rpy_local[:, 1], ee_rpy_local[:, 2])
+
+    # 로봇 베이스 프레임 -> 월드 프레임 변환
+    base_pos_w = robot.data.root_pos_w
+    base_quat_w = robot.data.root_quat_w
+    
+    ee_pos_world = quat_apply(base_quat_w, ee_pos_local) + base_pos_w
+    ee_quat_world = quat_mul(base_quat_w, ee_quat_local)
+
+    roll_w, pitch_w, yaw_w = euler_xyz_from_quat(ee_quat_world)
+    ee_rpy_world = torch.stack([roll_w, pitch_w, yaw_w], dim=1)
+
+    ee_pose_world = torch.cat([ee_pos_world, ee_rpy_world], dim=1)
+    # print(f"EE Position from FKSolver: {ee_pose_world[1].cpu().numpy()}")
+    
+    ee_index_lab = env.scene["robot"].body_names.index(ee_frame_name)
+    ee_pos = env.scene["robot"].data.body_pos_w[:, ee_index_lab]
+    ee_quat = robot.data.body_quat_w[:, ee_index_lab]
+    roll, pitch, yaw = euler_xyz_from_quat(ee_quat)
+    ee_rpy = torch.stack([roll, pitch, yaw], dim=1)
+
+    ee_pose = torch.cat([ee_pos, ee_rpy], dim=1)
 
     return ee_pose
 
-
-def ee_to_grid(env, ee_frame_name=EE_FRAME_NAME, grid_size=0.02):
+def ee_to_grid(env: "ManagerBasedRLEnv"):
     """
     EE 좌표를 grid 좌표로 변환
     """
-    ee_pose = get_ee_pose(env, asset_name="robot") 
-    ee_pos = ee_pose[:, :3] # 위치 (x, y, z)만 사용
-
+    robot = env.scene["robot"]
     workpiece = env.scene["workpiece"]
-    workpiece_pos_tensor, _ = workpiece.get_world_poses()
-    workpiece_pos_tensor = workpiece_pos_tensor.to(env.device)
-    wp_pos = workpiece_pos_tensor.squeeze()[:3]
-    
+    base_pos_w = robot.data.root_pos_w  # 로봇 베이스의 월드 위치 (Num_Envs, 3)
+    WORKPIECE_REL_POS = torch.tensor([0.75, 0.0, 0.0], dtype=base_pos_w.dtype, device=env.device)
+    wp_pos = base_pos_w + WORKPIECE_REL_POS.unsqueeze(0)
+
+    ee_pos = get_ee_pose(env, asset_name="robot")[:, :3] # 위치 (x, y, z)만 사용
+
     if not hasattr(env, "wp_size_x"):
         wp_size_x, wp_size_y = get_workpiece_size(workpiece)
         env.wp_size_x = wp_size_x
         env.wp_size_y = wp_size_y
-        env.grid_x_num = int(wp_size_x / grid_size)
-        env.grid_y_num = int(wp_size_y / grid_size)
-    
+        wp_size_x_t = torch.tensor(env.wp_size_x, device=env.device)
+        wp_size_y_t = torch.tensor(env.wp_size_y, device=env.device)
+        env.grid_x_num = torch.ceil(wp_size_x_t / GRID_SIZE).long().item()
+        env.grid_y_num = torch.ceil(wp_size_y_t / GRID_SIZE).long().item()
+        
     wp_size_x_t = torch.tensor(env.wp_size_x, device=env.device)
     wp_size_y_t = torch.tensor(env.wp_size_y, device=env.device)
     grid_x_num = env.grid_x_num
     grid_y_num = env.grid_y_num
-
-    origin_x = wp_pos[0] - wp_size_x_t / 2
-    origin_y = wp_pos[1] - wp_size_y_t / 2
+    
+    origin_x = wp_pos[:, 0] - wp_size_x_t / 2
+    origin_y = wp_pos[:, 1] - wp_size_y_t / 2
 
     ee_xy = ee_pos[:, :2].clone()
     ee_xy[:, 0] -= origin_x
     ee_xy[:, 1] -= origin_y
 
-    grid_x = torch.clamp((ee_xy[:, 0] / grid_size).long(), 0, grid_x_num - 1)
-    grid_y = torch.clamp((ee_xy[:, 1] / grid_size).long(), 0, grid_y_num - 1)
+    grid_x = torch.clamp((ee_xy[:, 0] / GRID_SIZE).long(), 0, grid_x_num - 1)
+    grid_y = torch.clamp((ee_xy[:, 1] / GRID_SIZE).long(), 0, grid_y_num - 1)
+
+    # if env.episode_length_buf[0].item() < 2: # 에피소드 초기에만 출력
+    #     print("\n--- GRID DEBUGGING INFO ---")
+    #     # 로봇 베이스 월드 XY 좌표
+    #     print(f"Robot Base World XY: {base_pos_w[ENV_ID, 0].item():.3f}, {base_pos_w[ENV_ID, 1].item():.3f}")
+    #     # 작업물 중심 좌표
+    #     print(f"Workpiece Center (wp_pos): {wp_pos[ENV_ID, 0].item():.3f}, {wp_pos[ENV_ID, 1].item():.3f}")
+    #     # 그리드 원점 Origin 좌표
+    #     print(f"Grid Origin XY: {origin_x[ENV_ID].item():.3f}, {origin_y[ENV_ID].item():.3f}")
+    #     # EE의 월드 XY 좌표
+    #     print(f"EE World XY (ee_pos): {ee_pos[ENV_ID, 0].item():.3f}, {ee_pos[ENV_ID, 1].item():.3f}")
+    #     # 상대 EE 좌표 (Workpiece 원점 기준)
+    #     print(f"EE Relative XY: {ee_xy[ENV_ID, 0].item():.3f}, {ee_xy[ENV_ID, 1].item():.3f}")
+    #     # 계산된 그리드 인덱스
+    #     print("---------------------------\n")
+    # print(f"Calculated Grid Index: X={grid_x[ENV_ID]}, Y={grid_y[ENV_ID]}")
 
     return grid_x, grid_y
 
-
-def coverage_reward(env, grid_size=0.02):
-    """
-    엔드이펙터가 방문한 grid cell의 증가분을 계산해 coverage reward를 반환.
-    """
-    grid_x, grid_y = ee_to_grid(env, grid_size=grid_size)
-    total_cells = env.grid_x_num * env.grid_y_num
-    
-    # grid mask 초기화
-    if not hasattr(env, "grid_mask"):
-        return torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
-    
-    previous_mask = env.grid_mask.clone()
-    
-    # 현재 위치 방문 표시: 새로 방문한 셀 = 1, 재방문/미방문 셀 = 0
-    indices = torch.arange(env.num_envs, device=env.device)
-    env.grid_mask[indices, grid_x, grid_y] = True
-
-    # 새로 방문한 셀 수
-    newly_visited = (env.grid_mask.long() - previous_mask.long()).sum(dim=(1, 2)).float()
-    
-    # 커버리지 비율 (0.0 ~ 1.0)
-    current_covered_count = env.grid_mask.sum(dim=(1, 2)).float()
-    coverage_ratio = current_covered_count / total_cells
-
-    # exponential scaling 적용
-    # exp_reward = newly_visited * (torch.exp(3.0 * coverage_ratio) - 1.0)
-    exp_reward = (torch.exp(3.0 * coverage_ratio) - 1.0)
-
-    return exp_reward
-
-
-def revisit_penalty(env, grid_size=0.02):
-    """
-    이미 방문한 grid cell을 다시 방문하면 벌점
-    """
-    grid_x, grid_y = ee_to_grid(env, grid_size=grid_size)
-
-    # grid_mask 초기화
-    if not hasattr(env, "grid_mask"):
-        return torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
-    
-    # 현재 EE 위치가 grid_mask에서 True인지 확인 (재방문 여부 확인)
-    indices = torch.arange(env.num_envs, device=env.device)
-    is_revisited = env.grid_mask[indices, grid_x, grid_y]
-    revisited = is_revisited.float()   # True -> 1.0, False -> 0.0
-
-    return -revisited
-
-
-def coverage_completion_reward(env, threshold=0.95, bonus_scale=10.0):
-    """
-    surface coverage 비율이 threshold를 넘으면 bonus_scale 만큼의 보상 제공
-    """
-    if not hasattr(env, "grid_mask"):
-        return torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
-    
-    num_envs = env.grid_mask.shape[0]
-    # 현재 커버리지 비율 (0.0 ~ 1.0)
-    completion = env.grid_mask.view(env.num_envs, -1).float().mean(dim=1)
-    
-    # 임계값(threshold)을 넘어선 부분만 추출
-    over_threshold = torch.clamp(completion - threshold, min=0.0)
-    # 남은 완료 비율 (1 - threshold)로 나누어 다시 0.0 ~ 1.0 범위로 정규화
-    # (1.0 - threshold)가 0에 가까우면 나눗셈이 불안정해질 수 있으므로 epsilon 추가
-    remaining_range = 1.0 - threshold
-    epsilon = 1e-6
-    if remaining_range > epsilon:
-        normalized_bonus_ratio = over_threshold / remaining_range
-    else:
-        # threshold가 거의 1.0인 경우, over_threshold가 0보다 크면 1.0을 반환
-        normalized_bonus_ratio = (over_threshold > 0.0).float()
-    
-    # 커버리지 100% 달성 시 bonus_scale 만큼의 보상
-    return normalized_bonus_ratio * bonus_scale
-
-
-def reset_grid_mask(env, env_ids):
+def reset_grid_mask(env: "ManagerBasedRLEnv", env_ids):
     """
     에피소드 리셋 시 env.grid_mask 텐서를 False(0)로 초기화하고,
     최초 호출 시 Grid Mask를 생성
     """
     workpiece = env.scene["workpiece"]
-    GRID_SIZE = 0.02
 
     # Grid 차원 정보가 env에 없으면 계산 및 저장
     if not hasattr(env, "wp_size_x"):
         wp_size_x, wp_size_y = get_workpiece_size(workpiece)
         env.wp_size_x = wp_size_x
         env.wp_size_y = wp_size_y
-        env.grid_x_num = int(wp_size_x / GRID_SIZE)
-        env.grid_y_num = int(wp_size_y / GRID_SIZE)
+        wp_size_x_t = torch.tensor(env.wp_size_x, device=env.device)
+        wp_size_y_t = torch.tensor(env.wp_size_y, device=env.device)
+        env.grid_x_num = torch.ceil(wp_size_x_t / GRID_SIZE).long().item()
+        env.grid_y_num = torch.ceil(wp_size_y_t / GRID_SIZE).long().item()
 
     # 2. grid_mask 속성이 env에 없으면 초기 생성
     if not hasattr(env, "grid_mask"):
@@ -241,90 +464,3 @@ def reset_grid_mask(env, env_ids):
         env._grid_mask_history[env_ids] = 0.0
 
     return {}
-
-
-def surface_proximity_reward(env, asset_cfg: SceneEntityCfg):
-    ee_pose = get_ee_pose(env, asset_name="robot") 
-    ee_z = ee_pose[:, 2]
-
-    # workpiece의 높이(평면 가정)
-    workpiece = env.scene["workpiece"]
-    target_z = get_workpiece_surface_height(workpiece, surface_offset=0.005)
-    target_z_tensor = torch.full_like(ee_z, target_z)
-    error = torch.abs(ee_z - target_z_tensor)
-
-    return torch.exp(-10 * error)
-
-
-def ee_orientation_alignment(env, asset_cfg: SceneEntityCfg, target_axis=(0.0, 0.0, -1.0)):
-    """
-    엔드이펙터(EE)의 Z축이 월드 좌표계의 목표 축(Target Axis)과 정렬되도록 보상을 제공
-    """
-    # 1. Asset 이름 가져오기
-    asset_name = asset_cfg.name if hasattr(asset_cfg, "name") else "robot"
-    
-    # 2. EE 위치 및 회전 정보 가져오기
-    ee_pose = get_ee_pose(env, asset_name=asset_name) 
-    
-    # roll, pitch, yaw 추출
-    roll, pitch, yaw = ee_pose[:, 3], ee_pose[:, 4], ee_pose[:, 5]
-    
-    # [중요] 3개의 변수를 하나의 텐서로 합칩니다. (shape: [num_envs, 3])
-    euler_angles = torch.stack([roll, pitch, yaw], dim=-1)
-    
-    # [중요] 함수에 합친 텐서와 회전 순서("XYZ")를 넣어줍니다.
-    rot_mat = matrix_from_euler(euler_angles, "XYZ")
-
-    # 회전 행렬의 3번째 열(Column)이 로봇의 Z축 방향입니다.
-    ee_z_axis_w = rot_mat[:, :, 2]
-    
-    # 목표 축과 비교
-    target_axis_t = torch.tensor(target_axis, dtype=ee_z_axis_w.dtype, device=env.device).unsqueeze(0).repeat(env.num_envs, 1)
-    
-    # 내적(Dot product)으로 정렬도 계산 (1에 가까울수록 수직)
-    alignment_measure = torch.abs(torch.sum(ee_z_axis_w * target_axis_t, dim=1))
-    
-    return alignment_measure
-
-def time_efficiency_reward(env, max_steps: int = 1000):
-    """
-    시간 효율성에 대한 보상함수
-    """
-    # 현재 step
-    current_step_tensor = env.episode_length_buf.to(torch.float32)
-    max_steps_tensor = torch.tensor(max_steps, dtype=torch.float32, device=env.device)
-
-    # normalize: 0 ~ 1, 작을수록 reward 높음
-    reward = 1.0 - (current_step_tensor / max_steps_tensor)
-    reward = torch.clamp(reward, min=0.0, max=1.0)
-
-    return reward
-    
-    
-def action_magnitude_reward(env):
-    """
-    로봇이 가만히 있지 않고 관절을 움직이면 보상 (얼음 땡 효과)
-    """
-    # env.action_manager.action : 현재 스텝에서 로봇이 취한 행동(Action) 값
-    return torch.mean(torch.square(env.action_manager.action), dim=1)
-    
-def distance_to_workpiece_reward(env, asset_cfg: SceneEntityCfg):
-    """
-    가장자리에 있는 로봇을 작업물 중앙으로 당겨오는 자석 보상
-    """
-    # 1. 로봇 손끝(EE) 위치 (X, Y)
-    asset_name = asset_cfg.name if hasattr(asset_cfg, "name") else "robot"
-    ee_pose = get_ee_pose(env, asset_name=asset_name)
-    ee_xy = ee_pose[:, :2]
-
-    # 2. 작업물 중심 위치 (X, Y)
-    workpiece = env.scene["workpiece"]
-    workpiece_pos_tensor, _ = workpiece.get_world_poses()
-    workpiece_pos_tensor = workpiece_pos_tensor.to(env.device)
-    target_xy = workpiece_pos_tensor.squeeze()[:2]
-
-    # 3. 거리 계산 (멀수록 점수가 작아짐)
-    distance = torch.norm(ee_xy - target_xy, dim=1)
-    
-    # 4. 거리가 0에 가까우면 1점, 멀면 0점
-    return torch.exp(-2.0 * distance)

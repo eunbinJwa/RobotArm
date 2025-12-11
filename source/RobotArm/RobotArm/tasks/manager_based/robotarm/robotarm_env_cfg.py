@@ -60,7 +60,7 @@ class RobotarmSceneCfg(InteractiveSceneCfg):
             usd_path="/home/eunseop/isaac/isaac_save/flat_surface_2.usd"
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(0.5, 0.0, 0.0),
+            pos=(0.75, 0.0, 0.0),
             rot=(1.0, 0.0, 0.0, 0.0),
         ),
     )
@@ -127,31 +127,20 @@ class ObservationsCfg:
     class PolicyCfg(ObsGroup):
         """Observations for policy group."""
 
-        # observation terms (order preserved)
-        # joint_pos_rel = ObsTerm(func=mdp.joint_pos_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
-        # joint_vel_rel = ObsTerm(func=mdp.joint_vel_rel, noise=Unoise(n_min=-0.01, n_max=0.01))
-        
         grid_mask_state = ObsTerm(      # Grid Mask의 상태: Policy가 방문하지 않은 곳을 찾아가도록 유도
             func=local_obs.grid_mask_state_obs,
             params={
-                "grid_mask_history_len": 4
+                "grid_mask_history_len": 4,
             }
         )
 
         ee_pose_history = ObsTerm(
             func=local_obs.ee_pose_history,
             params={
-            	"asset_cfg": SceneEntityCfg("robot"),
-                "history_len": 10
+                "history_len": 10,
                 },
         )
 
-        # contact_forces = ObsTerm(
-        #     func=local_obs.get_contact_forces,
-        #     params={
-        #         "sensor_name": "ActionGraphContactSensor"
-        #     }
-        # )
 
         def __post_init__(self):
             self.enable_corruption = True
@@ -170,7 +159,7 @@ class EventCfg:
         func=mdp.reset_joints_by_offset,
         mode="reset",
         params={
-            "position_range": (-0.5, 0.5),
+            "position_range": (0, 0),
             "velocity_range": (0.0, 0.0),
         },
     )
@@ -184,68 +173,53 @@ class EventCfg:
 @configclass
 class RewardsCfg:
     """Reward terms for the MDP."""
-    
-    # [핵심 1: 당근 강화] 커버리지 보상을 2.0 -> 10.0으로 5배 뻥튀기
-    # 로봇에게 "바닥 닦는 게 이 세상에서 제일 중요하다"고 세뇌시킴
+   
+    # new_visit = RewTerm(
+    #     func=local_rew.new_visit_reward,
+    #     weight=0.0,
+    # )
+
     coverage = RewTerm(
         func=local_rew.coverage_reward,
-        weight=10.0, 
-        params={"grid_size": 0.02},
-    )
-
-    # [핵심 2: 채찍 제거] 중복 방문 벌점을 -0.5 -> 0.0으로 삭제
-    # "같은 곳 또 가도 되니까 제발 쫄지 말고 움직여"라고 안심시킴
-    revisit_penalty = RewTerm(
-        func=local_rew.revisit_penalty,
-        weight=0.0, 
-        params={"grid_size": 0.02},
-    )
-
-    # [핵심 3: 나침반 추가] 가장자리에 있는 로봇을 중앙(0,0)으로 당겨오는 자석
-    # rewards.py에 distance_to_workpiece_reward 함수가 있어야 함
-    distance_to_center = RewTerm(
-        func=local_rew.distance_to_workpiece_reward,
-        weight=0.5, 
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=[EE_FRAME_NAME])},
-    )
-
-    # [핵심 4: 얼음 땡] 가만히 있으면 0점, 움직이면 점수 줌
-    # rewards.py에 action_magnitude_reward 함수가 있어야 함
-    action_movement = RewTerm(
-        func=local_rew.action_magnitude_reward,
-        weight=0.1, 
-    )
-
-    # [기존 유지] 표면 높이 유지 (너무 강하면 표면에 못 붙으니 1.0 유지)
-    surface_proximity = RewTerm(
-        func=local_rew.surface_proximity_reward,
         weight=1.0,
-        params={"asset_cfg": SceneEntityCfg("robot", body_names=EE_FRAME_NAME)},
+        params={"exp_scale": 4.0},
     )
     
-    # [기존 유지] 수직 자세 유지
+    ee_movement = RewTerm(
+        func=local_rew.ee_movement_reward,
+        weight=20.0,
+    )
+
+    out_of_bounds_penalty = RewTerm(
+        func=local_rew.out_of_bounds_penalty,
+        weight=10.0
+    )
+
+    # 중복 방문 벌점을 0.5 -> 0.0으로 삭제
+    revisit_penalty = RewTerm(
+        func=local_rew.revisit_penalty,
+        weight=0.0,
+    )
+
+    # 표면 높이 유지
+    surface_proximity = RewTerm(
+        func=local_rew.surface_proximity_reward,
+        weight=5.0,
+    )
+    
+    # 수직 자세 유지
     # 초반 탐색 방해를 줄이기 위해 1.5 -> 0.5로 잠시 낮춤 (나중에 올려도 됨)
     ee_orientation_alignment = RewTerm(
         func=local_rew.ee_orientation_alignment,
-        weight=0.5,
-        params={
-            "asset_cfg": SceneEntityCfg("robot", body_names=[EE_FRAME_NAME]),
-            "target_axis": (0.0, 0.0, -1.0),
-        },
+        weight=10.0,
+        params={"target_axis": (0.0, 0.0, -1.0)},
     )
 
-    # [기존 유지] 100% 달성 보너스 (초반엔 의미 없지만 놔둠)
-    coverage_completion = RewTerm(
-        func=local_rew.coverage_completion_reward,
-        weight=1.0,
-        params={"threshold": 0.90, "bonus_scale": 10.0}
-    )
-
-    # [기존 유지] 시간 효율성
+    # 시간 효율성
     time_efficiency = RewTerm(
         func=local_rew.time_efficiency_reward,
-        weight=1.0,
-        params={"max_steps": 750},
+        weight=0.5,
+        params={"max_steps": 1800},
     )
 
 @configclass
@@ -254,35 +228,50 @@ class TerminationsCfg:
 
     time_out = DoneTerm(func=mdp.time_out, time_out=True)
     
-    # # 작업 성공
-    # task_success = DoneTerm(
-    #     func=local_rew.coverage_completion_reward,
-    #     params={
-    #         "threshold": 0.95,
-    #         "bonus_scale": 10.0,
-    #     },
-    # )
+    # 커버리지 100% 달성 시 에피소드 종료
+    coverage_success = DoneTerm(func=local_rew.check_coverage_success)
 
 @configclass
 class CurriculumCfg:
     """Curriculum terms for the MDP."""
 
-    # action_rate = CurrTerm(
-    #     func=mdp.modify_reward_weight, params={"term_name": "action_rate", "weight": -0.005, "num_steps": 4500}
+    # coverage_curriculum = CurrTerm(
+    #     func=mdp.modify_reward_weight,
+    #     params={
+    #         "term_name": "coverage",
+    #         "weight": -0.0004,
+    #         "num_steps": 10000}
     # )
 
-    # joint_vel = CurrTerm(
-    #     func=mdp.modify_reward_weight, params={"term_name": "joint_vel", "weight": -0.001, "num_steps": 4500}
+    # out_of_bounds_curriculum = CurrTerm(
+    #     func=mdp.modify_reward_weight,
+    #     params={
+    #         "term_name": "out_of_bounds_penalty",
+    #         "weight": 0.0002,
+    #         "num_steps": 5000}
     # )
+
+    # ee_orientation_curriculum = CurrTerm(
+    #     func=mdp.modify_reward_weight,
+    #     params={
+    #         "term_name": "ee_orientation_alignment",
+    #         "weight": 0.0003,
+    #         "num_steps":7000}
+    # )
+
+    # time_efficiency_curriculum = CurrTerm(
+    #     func=mdp.modify_reward_weight,
+    #     params={
+    #         "term_name": "time_efficiency",
+    #         "weight": 0.0001,
+    #         "num_steps": 10000}
+    # )
+
 
 
 ##
 # Environment configuration
 ##
-
-
-
-######
 
 @configclass
 class RobotarmEnvCfg(ManagerBasedRLEnvCfg):
@@ -305,7 +294,7 @@ class RobotarmEnvCfg(ManagerBasedRLEnvCfg):
         """Post initialization."""
         # general settings
         self.decimation = 2
-        self.episode_length_s = 10.0
+        self.episode_length_s = 30.0
         # viewer settings
         self.viewer.eye = (3.5, 3.5, 3.5)
         # simulation settings
