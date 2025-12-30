@@ -2,7 +2,8 @@
 
 This project provides a reinforcement learning environment based on **Isaac Lab** for controlling a **UR10e robot arm** interacting with a workpiece.
 The training and evaluation are implemented using the `skrl` framework.
-
+ 
+ 
 ## Train & Play
 ### Train
 Run the following command to start reinforcement learning training:
@@ -17,8 +18,8 @@ Run a trained policy using:
 ```bash
 ~/IsaacLab/isaaclab.sh -p ~/RobotArm/scripts/skrl/play.py --task Template-Robotarm-v0
 ```
-
-
+ 
+ 
 ## Robot Model Configuration
 The UR10e robot model is loaded from a USD file.
 You can change the robot model path in the following file:
