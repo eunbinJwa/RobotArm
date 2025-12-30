@@ -11,12 +11,14 @@ Run the following command to start reinforcement learning training:
 
 ```bash
 ~/IsaacLab/isaaclab.sh -p ~/RobotArm/scripts/skrl/train.py --task Template-Robotarm-v0
+```
 
 ### Play
 Run a trained policy using:
 
 ```bash
 ~/IsaacLab/isaaclab.sh -p ~/RobotArm/scripts/skrl/play.py --task Template-Robotarm-v0
+```
 
 ---
 
@@ -28,11 +30,13 @@ You can change the robot model path in the following file:
 
 ```bash
 RobotArm/source/RobotArm/RobotArm/robots/ur10e_w_spindle.py
+```
 
 ### Code
 
 ```python
 UR10E_USD_PATH = "/home/eunseop/isaac/isaac_save/ur10e_tuning2.usd"
+```
 
 Update the UR10E_USD_PATH variable to use a different UR10e USD model.
 
@@ -45,6 +49,7 @@ The workpiece is defined as a USD asset in the environment configuration.
 
 ```bash
 RobotArm/source/RobotArm/RobotArm/robots/ur10e_w_spindle.py
+```
 
 ### Code
 
@@ -55,6 +60,7 @@ workpiece = AssetBaseCfg(
         usd_path="/home/eunseop/isaac/isaac_save/flat_surface_2.usd"
     ),
 )
+```
 
 Change the usd_path to load a different workpiece model.
 
@@ -67,6 +73,7 @@ The **mesh prim path** must match the structure of the loaded USD file.
 
 ```bash
 source/RobotArm/RobotArm/tasks/manager_based/robotarm/mdp/rewards.py
+```
 
 ### Code
 
@@ -78,6 +85,7 @@ mesh_prim = (
     .GetChild("mesh_")
     .GetChild("Mesh")
 )
+```
 
 This mesh path depends on the **internal hierarchy of the USD file** and may need to be modified when using a different workpiece model.
 
@@ -95,6 +103,7 @@ World
  └── flat_surface_5
      └── mesh_
          └── Mesh
+```
 
 ---
 
