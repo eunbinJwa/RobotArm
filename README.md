@@ -37,7 +37,7 @@ RobotArm/source/RobotArm/RobotArm/robots/ur10e_w_spindle.py
 UR10E_USD_PATH = "/home/eunseop/isaac/isaac_save/ur10e_tuning2.usd"
 ```
 
-Update the UR10E_USD_PATH variable to use a different UR10e USD model.
+Update the **UR10E_USD_PATH** to use a different UR10e USD model.
 <br />
 <br />
 
@@ -61,7 +61,7 @@ workpiece = AssetBaseCfg(
 )
 ```
 
-Change the usd_path to load a different workpiece model.
+Change the **usd_path** to load a different workpiece model.
 <br />
 <br />
 
@@ -85,15 +85,14 @@ mesh_prim = (
     .GetChild("Mesh")
 )
 ```
-
-This mesh path depends on the **internal hierarchy of the USD file** and may need to be modified when using a different workpiece model.
+This mesh path depends on the **internal hierarchy of the USD file** and may **need to be modified when using a different workpiece model**.
 
 ### How to Find the Correct Mesh Path (Isaac Sim)
 
 1. Open the workpiece USD file in Isaac Sim
-2. Open the Stage tab on the right
-3. Navigate the prim hierarchy to locate the mesh
-4. Replicate the hierarchy using GetChild() calls in rewards.py
+2. Open the **Stage** tab on the right
+3. Navigate the prim hierarchy to locate the **mesh**
+4. Replicate the hierarchy using **GetChild()** calls in rewards.py
 
 Example Stage hierarchy:
 
