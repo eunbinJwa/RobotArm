@@ -3,8 +3,10 @@
 본 프로젝트는 **Isaac Lab** 기반의 강화학습 환경으로,
 UR10e 로봇 암이 workpiece와 상호작용하며 작업을 수행하도록 학습하는 것을 목표로 합니다.
 학습 및 평가에는 `skrl` 강화학습 프레임워크를 사용합니다.
+<br />
 
 ---
+<br />
 
 ## 학습 및 실행 (Train & Play)
 ### 학습 (Train)
@@ -95,10 +97,10 @@ World
  - rewards.py 내 mesh prim 경로 수정
 - 잘못된 mesh 경로는 reward 계산 오류를 유발할 수 있음
 <br />
-<br />
+
 ---
 <br />
-<br />
+
 ## 보상 및 유틸리티 함수 개요
 본 섹션에서는 coverage 기반 강화학습을 위해 사용되는  
 보상 함수, 종료 조건, 로깅 및 각종 유틸리티 함수들을 설명합니다.
@@ -192,10 +194,10 @@ World
 - 에피소드 리셋 시 grid_mask 및 관련 누적 변수 초기화
 - coverage, revisit, out-of-bounds 카운터 리셋
 <br />
-<br />
+
 ---
 <br />
-<br />
+
 ## 관찰 함수 개요 (Observation Functions Overview)
 본 섹션에서는 강화학습에 사용되는 관찰 함수들을 설명합니다.
 
