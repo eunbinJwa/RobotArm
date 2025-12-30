@@ -3,8 +3,6 @@
 This project provides a reinforcement learning environment based on **Isaac Lab** for controlling a **UR10e robot arm** interacting with a workpiece.
 The training and evaluation are implemented using the `skrl` framework.
 
----
-
 ## Train & Play
 ### Train
 Run the following command to start reinforcement learning training:
@@ -20,7 +18,6 @@ Run a trained policy using:
 ~/IsaacLab/isaaclab.sh -p ~/RobotArm/scripts/skrl/play.py --task Template-Robotarm-v0
 ```
 
----
 
 ## Robot Model Configuration
 The UR10e robot model is loaded from a USD file.
@@ -39,8 +36,6 @@ UR10E_USD_PATH = "/home/eunseop/isaac/isaac_save/ur10e_tuning2.usd"
 ```
 
 Update the UR10E_USD_PATH variable to use a different UR10e USD model.
-
----
 
 ## Workpiece Configuration
 The workpiece is defined as a USD asset in the environment configuration.
@@ -64,7 +59,6 @@ workpiece = AssetBaseCfg(
 
 Change the usd_path to load a different workpiece model.
 
----
 
 ## Mesh Path Change for Reward Computation
 The **mesh prim path** must match the structure of the loaded USD file.
@@ -105,7 +99,6 @@ World
          └── Mesh
 ```
 
----
 
 ## Notes
 When changing the robot USD or workpiece USD, make sure to:
