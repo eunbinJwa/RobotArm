@@ -17,7 +17,7 @@ UR10e 로봇 암이 workpiece와 상호작용하며 작업을 수행하도록 �
 ~/IsaacLab/isaaclab.sh -p ~/RobotArm/scripts/skrl/play.py --task Template-Robotarm-v0
 ```
 <br />
-<br />
+
 ## 로봇 모델 설정 (Robot Model Configuration)
 UR10e 로봇 모델은 USD 파일로 로드됩니다.
 
@@ -87,7 +87,7 @@ World
          └── Mesh
 ```
 <br />
-<br />
+
 ## 주의사항
 - 로봇 USD 변경 시 모델 경로 수정
 - Workpiece USD 변경 시:
