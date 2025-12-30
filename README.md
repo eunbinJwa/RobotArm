@@ -20,7 +20,6 @@ Run a trained policy using:
 ~/IsaacLab/isaaclab.sh -p ~/RobotArm/scripts/skrl/play.py --task Template-Robotarm-v0
 ```
 <br />
-<br />
 
 ## Robot Model Configuration
 The UR10e robot model is loaded from a USD file.
@@ -104,7 +103,6 @@ World
      └── mesh_
          └── Mesh
 ```
-<br />
 <br />
 
 ## Notes
